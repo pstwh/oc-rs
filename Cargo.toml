@@ -1,0 +1,18 @@
+[package]
+name = "oc-rs"
+version = "0.1.0"
+edition = "2021"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+image = "0.24.3"
+onnxruntime = "0.0.14"
+opencv = { version = "0.68", default-features = false, features = ["imgproc"] }
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+[profile.release]
+strip = true
+lto = true
+panic = 'abort'

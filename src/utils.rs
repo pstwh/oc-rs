@@ -1,44 +1,36 @@
-use image::RgbImage;
-use onnxruntime::ndarray::Array3;
-use opencv::core::copy_make_border;
-use opencv::core::Mat_AUTO_STEP;
-use opencv::core::Scalar;
-use opencv::prelude::MatTraitConst;
-use opencv::{
-    core::Point2f,
-    imgproc,
-    prelude::{DataType, Mat},
+use std::{
+    cmp::{max, min},
+    ops::Deref,
+    os::raw::{c_int, c_void},
 };
-use std::cmp::{max, min};
-use std::os::raw::{c_int, c_void};
 
-pub fn array2_to_mat(data: Array3<f32>) -> Mat {
-    // transforms an Array2 into a opencv Mat data type.
+use onnxruntime::ndarray::{Array3, Array4};
+use opencv::{
+    core::{copy_make_border, Mat_AUTO_STEP, Scalar, Vec3b},
+    imgproc,
+    prelude::{Mat, MatTraitConst, MatTraitConstManual},
+};
+
+pub fn ndarray2mat(data: Array3<f32>, typ: i32) -> Mat {
     let rows = data.shape()[0];
     let cols = data.shape()[1];
     let data_ptr: *mut c_void = data.as_ptr() as *mut c_int as *mut c_void;
     let m = unsafe {
-        Mat::new_rows_cols_with_data(
-            rows as i32,
-            cols as i32,
-            f32::typ(),
-            data_ptr,
-            Mat_AUTO_STEP,
-        )
-        .unwrap()
+        Mat::new_rows_cols_with_data(rows as i32, cols as i32, typ, data_ptr, Mat_AUTO_STEP)
+            .unwrap()
     };
     m
 }
 
-pub fn array2_to_mat2(data: Array3<f32>) -> Mat {
-    // transforms an Array2 into a opencv Mat data type.
-    let rows = data.shape()[0];
-    let cols = data.shape()[1];
-    let data_ptr: *mut c_void = data.as_ptr() as *mut c_int as *mut c_void;
-    let m = unsafe {
-        Mat::new_rows_cols_with_data(rows as i32, cols as i32, 21, data_ptr, Mat_AUTO_STEP).unwrap()
-    };
-    m
+pub fn mat2input(mat: &Mat, height: usize, width: usize, mean: f32, std: f32) -> Array4<f32> {
+    let vec = Mat::data_typed::<Vec3b>(mat).unwrap();
+
+    let array = Array4::from_shape_fn((1, width, height, 3), |(_, y, x, c)| {
+        (Vec3b::deref(&vec[x + y * width as usize])[c] as f32 - mean) / std
+    })
+    .into();
+
+    return array;
 }
 
 pub fn max_index(array: &[f32]) -> usize {
@@ -51,13 +43,6 @@ pub fn max_index(array: &[f32]) -> usize {
     }
 
     i
-}
-
-pub fn array_to_rgb(arr: &[u8]) -> RgbImage {
-    let raw = arr.to_vec();
-
-    RgbImage::from_raw(128 as u32, 32 as u32, raw)
-        .expect("container should have the right size for the image dimensions")
 }
 
 pub fn clamp(n: i32, size: i32) -> i32 {
@@ -75,13 +60,29 @@ pub fn metric(outputs: &[f32]) -> f32 {
     return softmax.iter().cloned().fold(0. / 0., f32::max);
 }
 
-pub fn resize_with_pad(image: Mat, shape: Point2f) -> Mat {
+pub fn closest(list: &Vec<i32>, value: &i32) -> i32 {
+    let mut last_value = 0;
+    let mut last_difference = 10000;
+    for n in 0..list.len() {
+        let v = list.get(n).unwrap();
+        let difference: i32 = (v.clone() - value.clone()).abs();
+        if difference > last_difference {
+            break;
+        }
+        last_value = v.clone();
+        last_difference = difference;
+    }
+
+    return last_value;
+}
+
+pub fn resize_with_pad(image: &Mat, shape: opencv::core::Size) -> Mat {
     let height0 = image.rows();
     let width0 = image.cols();
-    let height = shape.y as i32;
-    let width = shape.x as i32;
+    let height = shape.height as i32;
+    let width = shape.width as i32;
 
-    let ratio = max(height, width) as f32 / max(height0, width0) as f32;
+    let ratio = (height as f32 / height0 as f32).min(width as f32 / width0 as f32);
     let nheight = (height0 as f32 * ratio) as i32;
     let nwidth = (width0 as f32 * ratio) as i32;
 
@@ -106,7 +107,7 @@ pub fn resize_with_pad(image: Mat, shape: Point2f) -> Mat {
 
     let mut filled = Mat::default();
     copy_make_border(
-        &image,
+        &resized,
         &mut filled,
         top,
         bottom,
@@ -114,7 +115,8 @@ pub fn resize_with_pad(image: Mat, shape: Point2f) -> Mat {
         right,
         0,
         Scalar::default(),
-    );
+    )
+    .unwrap();
 
     filled
 }

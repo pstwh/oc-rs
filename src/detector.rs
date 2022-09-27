@@ -1,19 +1,19 @@
 use std::ops::Mul;
 
-use image::ImageBuffer;
-use image::Rgb;
 use onnxruntime::{
     environment::Environment,
     ndarray::{Array4, Dim, IxDynImpl},
     tensor::OrtOwnedTensor,
     GraphOptimizationLevel,
 };
-use opencv::core::Point2f;
-use opencv::prelude::{DataType, MatTraitConst};
-use opencv::types::VectorOfMat;
-use opencv::{imgproc, prelude::Mat};
+use opencv::{
+    core::Point2f,
+    imgproc,
+    prelude::{DataType, Mat, MatTraitConst},
+    types::VectorOfMat,
+};
 
-use crate::utils::array2_to_mat;
+use crate::utils::{mat2input, ndarray2mat};
 
 pub struct Detector<'a> {
     model_bytes: &'a [u8],
@@ -46,18 +46,22 @@ impl<'a> Detector<'a> {
         }
     }
 
-    fn prepare_input(&self, image: ImageBuffer<Rgb<u8>, Vec<u8>>) -> (Array4<f32>, Point2f) {
-        let shape = image.dimensions();
-        let width0 = shape.0;
-        let height0 = shape.1;
-        let width = self.shape.get(0).expect("Invalid width, check shape");
-        let height = self.shape.get(1).expect("Invalid height, check shape");
-        let resized = image::imageops::resize(
-            &image,
-            *width,
-            *height,
-            ::image::imageops::FilterType::Triangle,
-        );
+    fn prepare_input(&self, image: &Mat) -> (Array4<f32>, Point2f) {
+        let width0 = image.cols();
+        let height0 = image.rows();
+        let width = *self.shape.get(0).expect("Invalid width, check shape") as i32;
+        let height = *self.shape.get(1).expect("Invalid height, check shape") as i32;
+        let mut resized = Mat::default();
+
+        imgproc::resize(
+            image,
+            &mut resized,
+            opencv::core::Size { width, height },
+            0.0,
+            0.0,
+            imgproc::INTER_LINEAR,
+        )
+        .expect("Error resizing image!");
 
         let scale = Point2f {
             x: width0.to_owned() as f32 / width.to_owned() as f32,
@@ -67,19 +71,15 @@ impl<'a> Detector<'a> {
         let mean = 255.0 * self.mean;
         let std = 255.0 * self.std;
 
-        let array =
-            Array4::from_shape_fn((1, *width as usize, *height as usize, 3), |(_, y, x, c)| {
-                (resized[(x as _, y as _)][c] as f32 - mean) / std
-            })
-            .into();
+        let array = mat2input(&resized, height as usize, width as usize, mean, std);
 
         (array, scale)
     }
 
-    pub fn get_mask(&self, image: ImageBuffer<Rgb<u8>, Vec<u8>>) -> (Mat, Point2f) {
+    pub fn get_mask(&self, image: Mat) -> (Mat, Point2f) {
         let width = self.shape.get(0).expect("Invalid width, check shape");
         let height = self.shape.get(1).expect("Invalid height, check shape");
-        let (array, scale) = self.prepare_input(image);
+        let (array, scale) = self.prepare_input(&image);
         let input_tensor_values = vec![array];
         let env = Environment::builder().with_name("env").build().unwrap();
 
@@ -100,7 +100,7 @@ impl<'a> Detector<'a> {
             .mul(255.0)
             .mapv(|elem| elem as f32);
 
-        let cv_raw = array2_to_mat(raw);
+        let cv_raw = ndarray2mat(raw, f32::typ());
         let mut cv_threshold = Mat::default();
         imgproc::threshold(
             &cv_raw,
@@ -133,7 +133,7 @@ impl<'a> Detector<'a> {
         (cv_converted, scale)
     }
 
-    pub fn get_contours(&self, image: ImageBuffer<Rgb<u8>, Vec<u8>>) -> (VectorOfMat, Point2f) {
+    pub fn get_contours(&self, image: Mat) -> (VectorOfMat, Point2f) {
         let (mask, scale) = self.get_mask(image);
         let mut contours = VectorOfMat::new();
         imgproc::find_contours(

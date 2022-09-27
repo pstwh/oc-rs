@@ -1,13 +1,16 @@
-use std::env;
+use clap::Parser;
 
+use crate::cli::{OcrsArgs, OcrsFormat};
 use crate::detector::Detector;
-use crate::recognizer::Recognizer;
-use crate::recognizer::WordBox;
+use crate::recognizer::{Recognizer, WordBox};
 
+use crate::utils::resize_with_pad;
+use opencv::core::Size;
+
+mod cli;
 mod detector;
 mod recognizer;
 mod utils;
-
 
 fn main() {
     let detector = Detector::new(
@@ -20,28 +23,43 @@ fn main() {
         2,
     );
 
+    let vocab = String::from("0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~°àâéèêëîïôùûçÀÂÉÈËÎÏÔÙÛÇ£€¥¢฿");
+
     let recognizer = Recognizer::new(
-        include_bytes!("../models/crnn_vgg16_bn.ort"), 
-        vec![32, 128, 3], 
-        0.694, 
-        0.298, 
-        "0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ!\"#$%&'()*+,-./:;<=>?@[\\]^_`{|}~°àâéèêëîïôùûçÀÂÉÈËÎÏÔÙÛÇ£€¥¢฿".to_string(), 
+        include_bytes!("../models/crnn_vgg16_bn.ort"),
+        vec![32, 128, 3],
+        0.694,
+        0.298,
+        vocab,
         123,
-        124
+        124,
     );
 
+    let args = OcrsArgs::parse();
 
-    let args: Vec<String> = env::args().collect();
-    let file_path = &args[1];
+    let mut image = opencv::imgcodecs::imread(&args.file_path, 1).expect("Invalid image file!");
+    if args.resize {
+        image = resize_with_pad(
+            &image,
+            Size {
+                width: 1000,
+                height: 1000,
+            },
+        );
+    }
 
-    let image = image::open(file_path).unwrap().to_rgb8();
     let (contours, scale) = detector.get_contours(image.clone());
-    if args.len() < 3 {
-        let words: Vec<WordBox> = recognizer.get_words(image, contours, scale);
-        print!("{}", serde_json::to_string(&words).unwrap());
-    } else {
-        let words: Vec<String> = recognizer.get_words(image, contours, scale).into_iter().map(|x| x.word).collect();
-        print!("{}", words.join(" "));
+    let word_bboxes: Vec<WordBox> = recognizer.get_words(image, contours, scale);
+    match args.format {
+        OcrsFormat::Json => {
+            print!(
+                "{}",
+                serde_json::to_string(&word_bboxes).expect("Invalid result!")
+            );
+        }
+        OcrsFormat::Text => {
+            let words: Vec<String> = word_bboxes.into_iter().map(|x| x.word).collect();
+            print!("{}", words.join(" "));
+        }
     }
 }
-
